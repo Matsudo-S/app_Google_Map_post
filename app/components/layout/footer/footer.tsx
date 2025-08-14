@@ -9,7 +9,7 @@ export default function Footer() {
         <div className={styles.content}>
           <div className={styles.section}>
             <h3>Next.js Blog</h3>
-            <p>A modern blog built with Next.js and TypeScript</p>
+            <p>Next.js と TypeScript で作成したブログです。</p>
           </div>
           <div className={styles.section}>
             <h4>リンク</h4>
@@ -30,7 +30,7 @@ export default function Footer() {
           </div>
         </div>
         <div className={styles.bottom}>
-          <p>&copy; 2024 Next.js ブログ. All rights reserved.</p>
+          <p>&copy; 2025 Next.js ブログ. All rights reserved.</p>
         </div>
       </div>
     </footer>
