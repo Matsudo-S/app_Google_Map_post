@@ -7,14 +7,15 @@ export default function Header() {
     <header className={styles.header}>
       <div className={styles.container}>
         <div className={styles.logo}>
-          <h1>Next.js Blog</h1>
+          <Link href="/">
+            <h1 className={styles.navLink}>google map app</h1>
+          </Link>
         </div>
         <nav className={styles.nav}>
           <ul className={styles.navList}>
-            <li><Link href="/" className={styles.navLink}>Home</Link></li>
-            <li><Link href="/blog" className={styles.navLink}>Blog</Link></li>
-            <li><Link href="/about" className={styles.navLink}>About</Link></li>
-            <li><Link href="/contact" className={styles.navLink}>Contact</Link></li>
+            <li><Link href="/post" className={styles.navLink}>post</Link></li>
+            <li><Link href="/about" className={styles.navLink}>about</Link></li>
+            <li><Link href="/contact" className={styles.navLink}>contact</Link></li>
           </ul>
         </nav>
       </div>

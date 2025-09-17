@@ -2,32 +2,6 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 export function middleware(request: NextRequest) {
-  // Get the pathname of the request (e.g. /, /blog, /about)
-  const path = request.nextUrl.pathname;
-
-  // Define public paths that don't require authentication
-  const isPublicPath = path === '/' || 
-                      path === '/login' || 
-                      path === '/signup' || 
-                      path.startsWith('/api/') ||
-                      path.startsWith('/_next/') ||
-                      path.startsWith('/favicon.ico');
-
-  // Get the token from the cookies
-  const token = request.cookies.get('token')?.value || '';
-
-  // Redirect to login if accessing protected route without token
-  if (!isPublicPath && !token) {
-    const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('from', path);
-    return NextResponse.redirect(loginUrl);
-  }
-
-  // Redirect to dashboard if accessing login/signup with valid token
-  if ((path === '/login' || path === '/signup') && token) {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
-  }
-
   // Add security headers
   const response = NextResponse.next();
   
@@ -37,7 +11,12 @@ export function middleware(request: NextRequest) {
   response.headers.set('Referrer-Policy', 'origin-when-cross-origin');
   response.headers.set(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;"
+    "default-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://fonts.googleapis.com https://fonts.gstatic.com; " +
+    "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://maps.googleapis.com https://maps.gstatic.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "img-src 'self' data: https:; " +
+    "font-src 'self' data: https://fonts.gstatic.com; " +
+    "connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://routes.googleapis.com https://*.googleapis.com https://*.google.com;"
   );
 
   return response;

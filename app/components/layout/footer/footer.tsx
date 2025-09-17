@@ -8,16 +8,17 @@ export default function Footer() {
       <div className={styles.container}>
         <div className={styles.content}>
           <div className={styles.section}>
-            <h3>Next.js Blog</h3>
+          <Link href="/">
+            <h3 className={styles.link}>google map app</h3>
+          </Link>
             <p>Next.js と TypeScript で作成したブログです。</p>
           </div>
           <div className={styles.section}>
             <h4>リンク</h4>
             <ul className={styles.linkList}>
-              <li><Link href="/" className={styles.link}>Home</Link></li>
-              <li><Link href="/blog" className={styles.link}>Blog</Link></li>
-              <li><Link href="/about" className={styles.link}>About</Link></li>
-              <li><Link href="/contact" className={styles.link}>Contact</Link></li>
+              <li><Link href="/post" className={styles.link}>post</Link></li>
+              <li><Link href="/about" className={styles.link}>about</Link></li>
+              <li><Link href="/contact" className={styles.link}>contact</Link></li>
             </ul>
           </div>
           <div className={styles.section}>

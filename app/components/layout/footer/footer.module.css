@@ -52,6 +52,7 @@
   color: #cbd5e1;
   text-decoration: none;
   transition: color 0.2s ease;
+  text-transform: capitalize;
 }
 
 .link:hover {
