@@ -83,7 +83,7 @@ export default function RouteList({
     const labels = {
       'WALKING': '🚶 徒歩',
       'DRIVING': '🚗 車',
-      'TRANSIT': '🚃 電車',
+      'TRANSIT': '🚃 公共交通機関',
       'BICYCLING': '🚴 自転車',
     };
     return labels[mode as keyof typeof labels] || mode;
@@ -188,10 +188,11 @@ export default function RouteList({
                     onChange={(e) => onUpdateRouteSegment(segment.fromLocationId, segment.toLocationId, e.target.value as any)}
                     className="text-xs border border-gray-300 rounded px-2 py-1 text-black"
                   >
-                    <option value="WALKING">🚶 徒歩</option>
-                    <option value="DRIVING">🚗 車</option>
-                    <option value="TRANSIT">🚃 電車</option>
-                    <option value="BICYCLING">🚴 自転車</option>
+                    {['WALKING', 'DRIVING', 'TRANSIT', 'BICYCLING'].map((mode) => (
+                      <option key={mode} value={mode}>
+                        {getTravelModeLabel(mode)}
+                      </option>
+                    ))}
                   </select>
                 </div>
               );

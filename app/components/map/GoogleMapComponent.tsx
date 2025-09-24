@@ -31,230 +31,22 @@ export default function GoogleMapComponent({
   const [error, setError] = useState<string | null>(null);
   const [routeDurations, setRouteDurations] = useState<{ [key: string]: string }>({});
   const [totalDuration, setTotalDuration] = useState<string>('');
+  const [transitMessage, setTransitMessage] = useState<string>('');
 
-  // Routes API v2を使用して電車ルートを計算する関数
-  const calculateTransitRouteWithRoutesAPI = async (fromLocation: Location, toLocation: Location): Promise<google.maps.DirectionsResult> => {
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_ROUTES_MAP_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    
-    if (!apiKey) {
-      throw new Error('Google Maps API key is not configured');
-    }
 
-    // 近傍の公共交通機関の駅を検索して、駅の中心点にスナップする
-    const findNearestTransitStation = async (lat: number, lng: number): Promise<{ lat: number; lng: number; name?: string; placeId?: string } | null> => {
-      try {
-        // PlacesServiceは任意のHTMLElementで初期化可能
-        const dummy = document.createElement('div');
-        const placesService = new google.maps.places.PlacesService(dummy);
 
-        const location = new google.maps.LatLng(lat, lng);
 
-        const search = (type: string) => new Promise<google.maps.places.PlaceResult[] | null>((resolve) => {
-          placesService.nearbySearch(
-            {
-              location,
-              rankBy: google.maps.places.RankBy.DISTANCE,
-              type: type as any,
-              // rankBy=DISTANCEのときはradiusは指定しない
-            },
-            (results, status) => {
-              if (status === google.maps.places.PlacesServiceStatus.OK && results && results.length > 0) {
-                resolve(results);
-              } else {
-                resolve(null);
-              }
-            }
-          );
-        });
 
-        // transit_station → train_station → subway_station の順で検索
-        const resultList = (await search('transit_station')) || (await search('train_station')) || (await search('subway_station'));
-        if (resultList && resultList[0] && resultList[0].geometry && resultList[0].geometry.location) {
-          const pos = resultList[0].geometry.location;
-          return { lat: pos.lat(), lng: pos.lng(), name: resultList[0].name, placeId: resultList[0].place_id };
-        }
-        return null;
-      } catch (e) {
-        console.warn('findNearestTransitStation failed, fallback to original point', e);
-        return null;
-      }
-    };
-
-    // 現在時刻から5分後をUTC形式で設定（過去判定回避）
-    const now = new Date();
-    now.setMinutes(now.getMinutes() + 5);
-    const departureTime = now.toISOString();
-
-    // 駅中心点へスナップ（見つからなければ元の座標を使用）
-    const fromSnap = await findNearestTransitStation(fromLocation.lat, fromLocation.lng);
-    const toSnap = await findNearestTransitStation(toLocation.lat, toLocation.lng);
-
-    const fromLat = fromSnap?.lat ?? fromLocation.lat;
-    const fromLng = fromSnap?.lng ?? fromLocation.lng;
-    const toLat = toSnap?.lat ?? toLocation.lat;
-    const toLng = toSnap?.lng ?? toLocation.lng;
-
-    console.log('[TRANSIT] Input summary', {
-      fromLocation,
-      toLocation,
-      departureTime,
-      snapped: {
-        from: { lat: fromLat, lng: fromLng, placeId: (fromSnap as any)?.placeId, name: fromSnap?.name },
-        to: { lat: toLat, lng: toLng, placeId: (toSnap as any)?.placeId, name: toSnap?.name },
-      }
-    });
-
-    const buildRequestBody = (
-      oLat: number,
-      oLng: number,
-      dLat: number,
-      dLng: number,
-      relax: boolean,
-      originPlaceId?: string,
-      destinationPlaceId?: string,
-    ) => ({
-      origin: originPlaceId ? { placeId: originPlaceId } : { location: { latLng: { latitude: oLat, longitude: oLng } } },
-      destination: destinationPlaceId ? { placeId: destinationPlaceId } : { location: { latLng: { latitude: dLat, longitude: dLng } } },
-      travelMode: 'TRANSIT',
-      computeAlternativeRoutes: true,
-      departureTime: departureTime, // 必須フィールドを追加
-      // 緩和リトライ時のみ緩やかな指定を付ける
-      ...(relax && {
-        transitPreferences: {
-          routingPreference: 'LESS_WALKING',
-          allowedTravelModes: ['TRAIN', 'SUBWAY', 'RAIL', 'BUS']
-        }
-      })
-    });
-
-    try {
-      // 1) placeId（駅）優先 → 2) 駅スナップ座標 → 3) 元座標 → 4) 緩和オプション
-      const tryRequests = [
-        buildRequestBody(fromLat, fromLng, toLat, toLng, false, fromSnap?.placeId, toSnap?.placeId),
-        buildRequestBody(fromLat, fromLng, toLat, toLng, false),
-        buildRequestBody(fromLocation.lat, fromLocation.lng, toLocation.lat, toLocation.lng, false),
-        buildRequestBody(fromLat, fromLng, toLat, toLng, true, fromSnap?.placeId, toSnap?.placeId)
-      ];
-
-      let data: any | null = null;
-      const debugResponses: Array<{attempt: number; status: number; body: any}> = [];
-      for (const reqBody of tryRequests) {
-        const attemptIndex = tryRequests.indexOf(reqBody) + 1;
-        console.log(`[TRANSIT] Routes API v2 request (attempt ${attemptIndex})`, reqBody);
-        const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-            // デバッグのため全体像を取得
-            'X-Goog-FieldMask': 'routes,geocodingResults'
-        },
-          body: JSON.stringify(reqBody)
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`[TRANSIT] Routes API v2 error (attempt ${attemptIndex})`, response.status, errorText);
-          debugResponses.push({ attempt: attemptIndex, status: response.status, body: errorText });
-          // 403/400は即中断
-          if (response.status === 403) throw new Error('Routes API v2 is not enabled or API key is invalid. Please check Google Cloud Console settings.');
-          if (response.status === 400) throw new Error('Invalid request to Routes API v2. Please check request parameters.');
-          continue;
-        }
-
-        data = await response.json();
-        console.log(`[TRANSIT] Routes API v2 response (attempt ${attemptIndex})`, data);
-        debugResponses.push({ attempt: attemptIndex, status: 200, body: data });
-        if (data.routes && data.routes.length > 0) break; // 何か返ったら採用
-      }
-
-      // Routes API v2のレスポンスをDirections APIの形式に変換
-      if (data && data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        if (route.legs && route.legs.length > 0) {
-          const leg = route.legs[0];
-          
-          // 時間の変換（Routes API v2は秒単位で返す）
-          const durationSeconds = leg.duration ? parseInt(leg.duration.replace('s', '')) : 0;
-          const durationMinutes = Math.floor(durationSeconds / 60);
-          const durationText = durationMinutes > 0 ? `${durationMinutes}分` : '1分未満';
-          
-          // 距離の変換（メートル単位）
-          const distanceMeters = leg.distanceMeters || 0;
-          const distanceText = distanceMeters > 1000 ? `${Math.round(distanceMeters / 1000 * 10) / 10}km` : `${distanceMeters}m`;
-          
-          // TRANSITのポリラインを描画（あれば）
-          try {
-            if (map) {
-              // ルート全体のポリラインがあれば優先
-              const encodedWhole = route.polyline?.encodedPolyline;
-              const encodedSteps = (leg.steps || []).map((s: any) => s.polyline?.encodedPolyline).filter(Boolean);
-              const polylinesToDraw: string[] = encodedWhole ? [encodedWhole] : encodedSteps;
-
-              polylinesToDraw.forEach(encoded => {
-                try {
-                  const path = google.maps.geometry.encoding.decodePath(encoded);
-                  const polyline = new google.maps.Polyline({
-                    map,
-                    path,
-                    strokeColor: '#9c27b0',
-                    strokeOpacity: 0.9,
-                    strokeWeight: 5,
-                  });
-                  setTransitPolylines(prev => [...prev, polyline]);
-                } catch (e) {
-                  console.warn('Failed to decode and draw transit polyline', e);
-                }
-              });
-            }
-          } catch (e) {
-            console.warn('Transit polyline draw skipped', e);
-          }
-
-          // Directions APIの形式に変換
-          const directionsResult: google.maps.DirectionsResult = {
-            request: {} as google.maps.DirectionsRequest,
-            routes: [{
-              legs: [{
-                duration: {
-                  text: durationText,
-                  value: durationSeconds
-                },
-                distance: {
-                  text: distanceText,
-                  value: distanceMeters
-                },
-                start_address: fromLocation.name,
-                end_address: toLocation.name,
-                start_location: new google.maps.LatLng(fromLocation.lat, fromLocation.lng),
-                end_location: new google.maps.LatLng(toLocation.lat, toLocation.lng),
-                steps: leg.steps || [],
-                traffic_speed_entry: [],
-                via_waypoints: []
-              }],
-              overview_path: [],
-              overview_polyline: '',
-              bounds: new google.maps.LatLngBounds(),
-              copyrights: '',
-              warnings: [],
-              waypoint_order: [],
-              summary: '',
-              fare: undefined
-            }],
-            geocoded_waypoints: []
-          };
-          
-          return directionsResult;
-        }
-      }
-      
-      // ここまで到達したらルート未発見として通知（UI側は「電車ルート未発見」を表示）
-      console.warn('[TRANSIT] All attempts returned no routes. Debug dump:', debugResponses);
-      throw new Error('No transit route available');
-    } catch (error) {
-      console.error('Routes API v2 error:', error);
-      throw error;
-    }
+  // 2点間の距離を計算（ハーバサイン公式）
+  const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+    const R = 6371; // 地球の半径（km）
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
   };
 
   // コンポーネントのマウント状況を確認と初期化
@@ -427,6 +219,7 @@ export default function GoogleMapComponent({
       // ルートが未確定の場合は所要時間をクリア
       setRouteDurations({});
       setTotalDuration('');
+      setTransitMessage('');
     }
   }, [isRouteConfirmed]);
 
@@ -441,6 +234,7 @@ export default function GoogleMapComponent({
     // ルート確定時に所要時間を完全にリセット
     setRouteDurations({});
     setTotalDuration('');
+    setTransitMessage('');
 
     const calculateRouteDurations = async () => {
       // 毎回新しいオブジェクトと変数で初期化
@@ -467,11 +261,11 @@ export default function GoogleMapComponent({
           origin: { lat: fromLocation.lat, lng: fromLocation.lng },
           destination: { lat: toLocation.lat, lng: toLocation.lng },
           travelMode: google.maps.TravelMode[segment.travelMode],
-          // 電車ルートの場合は追加オプションを設定
+          // チュートリアルコードに基づくシンプルなtransitOptions設定
           ...(segment.travelMode === 'TRANSIT' && {
             transitOptions: {
               modes: [google.maps.TransitMode.RAIL, google.maps.TransitMode.SUBWAY, google.maps.TransitMode.TRAIN, google.maps.TransitMode.BUS],
-              routingPreference: google.maps.TransitRoutePreference.LESS_WALKING,
+              routingPreference: google.maps.TransitRoutePreference.FEWER_TRANSFERS,
             },
           }),
         };
@@ -479,15 +273,26 @@ export default function GoogleMapComponent({
         try {
           console.log(`Calculating route: ${fromLocation.name} → ${toLocation.name} (${segment.travelMode})`);
           
+          // チュートリアルコードに基づくシンプルなDirections API使用
+          console.log('Request:', request);
           let result: google.maps.DirectionsResult;
           
           if (segment.travelMode === 'TRANSIT') {
-            // Routes API v2を使用して電車ルートを取得
-            result = await calculateTransitRouteWithRoutesAPI(fromLocation, toLocation);
-            console.log('Successfully used Routes API v2 for transit route calculation');
+            // TRANSITの場合はGoogle Maps APIのみを使用
+            console.log('[TRANSIT] Using Google Maps API for transit route calculation');
+            setTransitMessage('Google Maps APIを使用してルートを計算中...');
+            result = await new Promise<google.maps.DirectionsResult>((resolve, reject) => {
+              directionsService.route(request, (result, status) => {
+                if (status === google.maps.DirectionsStatus.OK && result) {
+                  setTransitMessage('Google Maps APIを使用してルートを計算しました');
+                  resolve(result);
+                } else {
+                  reject(new Error(`公共交通機関のルートが見つかりませんでした。徒歩や車でのルートをお試しください。`));
+                }
+              });
+            });
           } else {
-            // 徒歩・車・自転車は従来のDirections APIを使用
-            console.log('Request:', request);
+            // 徒歩・車・自転車は通常のGoogle Maps APIを使用
             result = await new Promise<google.maps.DirectionsResult>((resolve, reject) => {
               directionsService.route(request, (result, status) => {
                 console.log(`Route result status: ${status}`, result);
@@ -503,18 +308,23 @@ export default function GoogleMapComponent({
                 }
               });
             });
+          }
 
-            // 非TRANSITはセグメントごとに描画
-            if (map) {
-              const renderer = new google.maps.DirectionsRenderer({
-                map,
-                suppressMarkers: true,
-                preserveViewport: true,
-                polylineOptions: { strokeColor: segment.travelMode === 'WALKING' ? '#34a853' : segment.travelMode === 'BICYCLING' ? '#fbbc04' : '#0b57d0', strokeWeight: 5 }
-              });
-              renderer.setDirections(result);
-              setSegmentRenderers(prev => [...prev, renderer]);
-            }
+          // セグメントごとに描画
+          if (map) {
+            const renderer = new google.maps.DirectionsRenderer({
+              map,
+              suppressMarkers: true,
+              preserveViewport: true,
+              polylineOptions: { 
+                strokeColor: segment.travelMode === 'WALKING' ? '#34a853' : 
+                           segment.travelMode === 'BICYCLING' ? '#fbbc04' : 
+                           segment.travelMode === 'TRANSIT' ? '#9c27b0' : '#0b57d0', 
+                strokeWeight: 5 
+              }
+            });
+            renderer.setDirections(result);
+            setSegmentRenderers(prev => [...prev, renderer]);
           }
 
           if (result.routes && result.routes[0] && result.routes[0].legs && result.routes[0].legs[0]) {
@@ -522,7 +332,13 @@ export default function GoogleMapComponent({
             const durationText = duration?.text || '0分';
             const durationValue = duration?.value || 0;
             
-            durations[`${segment.fromLocationId}-${segment.toLocationId}`] = durationText;
+            // TRANSITの場合は詳細情報を含める
+            if (segment.travelMode === 'TRANSIT' && result.routes[0].legs[0].steps[0].instructions) {
+              const instructions = result.routes[0].legs[0].steps[0].instructions;
+              durations[`${segment.fromLocationId}-${segment.toLocationId}`] = `${durationText} (${instructions})`;
+            } else {
+              durations[`${segment.fromLocationId}-${segment.toLocationId}`] = durationText;
+            }
             
             // 異常に長い時間（24時間以上）の場合は除外
             if (durationValue < 24 * 60 * 60) { // 24時間未満の場合のみ加算
@@ -611,7 +427,23 @@ export default function GoogleMapComponent({
       {/* 所要時間表示 */}
       {isRouteConfirmed && routeSegments.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="font-semibold text-black mb-2">ルート情報</h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-black">ルート情報</h3>
+            <div className="text-sm text-gray-600">
+              <span className="font-medium">出発時刻: </span>
+              <span className="text-blue-600">10:00</span>
+            </div>
+          </div>
+          
+          {/* 公共交通機関メッセージ */}
+          {transitMessage && (
+            <div className="mb-3 p-2 bg-blue-100 border border-blue-300 rounded text-sm text-blue-800">
+              <div className="flex items-center gap-2">
+                <span className="text-blue-600">ℹ️</span>
+                <span>{transitMessage}</span>
+              </div>
+            </div>
+          )}
           <div className="space-y-2">
             {Object.entries(routeDurations).map(([key, duration]) => {
               const [fromLocationId, toLocationId] = key.split('-');
@@ -623,21 +455,86 @@ export default function GoogleMapComponent({
               const modeLabels = {
                 'WALKING': '🚶 徒歩',
                 'DRIVING': '🚗 車',
-                'TRANSIT': '🚃 電車',
+                'TRANSIT': '🚃 公共交通機関',
                 'BICYCLING': '🚴 自転車',
               };
 
               if (!fromLocation || !toLocation) return null;
 
+              // TRANSITの場合は詳細情報を表示
+              const getTransitDetails = () => {
+                if (travelMode !== 'TRANSIT') return null;
+                
+                // ルート情報から交通機関の詳細を取得
+                const routeInfo = routeDurations[`${fromLocationId}-${toLocationId}`];
+                if (typeof routeInfo === 'string' && routeInfo.includes('→')) {
+                  const parts = routeInfo.split('→');
+                  if (parts.length >= 2) {
+                    const fromPart = parts[0].trim();
+                    const toPart = parts[1].trim();
+                    
+                    // 会社名と路線名を抽出
+                    const fromMatch = fromPart.match(/([A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+)\s+([A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+)/);
+                    const toMatch = toPart.match(/([A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+)\s+([A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+)/);
+                    
+                    if (fromMatch && toMatch) {
+                      return {
+                        fromCompany: fromMatch[1],
+                        fromLine: fromMatch[2],
+                        toCompany: toMatch[1],
+                        toLine: toMatch[2]
+                      };
+                    }
+                  }
+                }
+                return null;
+              };
+
+              const transitDetails = getTransitDetails();
+
               return (
-                <div key={key} className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2 text-black">
-                    <span className="font-medium">{fromLocation.name}</span>
-                    <span className="text-gray-400">→</span>
-                    <span className="font-medium">{toLocation.name}</span>
-                    <span className="text-blue-600 text-xs">({modeLabels[travelMode]})</span>
+                <div key={key} className="space-y-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-2 text-black">
+                      <span className="font-medium">{fromLocation.name}</span>
+                      <span className="text-gray-400">→</span>
+                      <span className="font-medium">{toLocation.name}</span>
+                      <span className="text-blue-600 text-xs">({modeLabels[travelMode]})</span>
+                    </div>
+                    <span className="font-semibold text-blue-700">{duration}</span>
                   </div>
-                  <span className="font-semibold text-blue-700">{duration}</span>
+                  
+                  {transitDetails && (
+                    <div className="text-xs text-gray-600 ml-4">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-1 rounded text-xs font-medium text-white ${
+                          transitDetails.fromCompany === 'JR' ? 'bg-blue-600' :
+                          transitDetails.fromCompany === '東京メトロ' ? 'bg-orange-500' :
+                          transitDetails.fromCompany === '都営地下鉄' ? 'bg-green-600' :
+                          transitDetails.fromCompany === '東急' ? 'bg-red-600' :
+                          transitDetails.fromCompany === '京急' ? 'bg-blue-500' :
+                          transitDetails.fromCompany === '小田急' ? 'bg-green-500' :
+                          transitDetails.fromCompany === '京王' ? 'bg-purple-600' :
+                          'bg-gray-600'
+                        }`}>
+                          {transitDetails.fromCompany} {transitDetails.fromLine}
+                        </span>
+                        <span className="text-gray-400">→</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium text-white ${
+                          transitDetails.toCompany === 'JR' ? 'bg-blue-600' :
+                          transitDetails.toCompany === '東京メトロ' ? 'bg-orange-500' :
+                          transitDetails.toCompany === '都営地下鉄' ? 'bg-green-600' :
+                          transitDetails.toCompany === '東急' ? 'bg-red-600' :
+                          transitDetails.toCompany === '京急' ? 'bg-blue-500' :
+                          transitDetails.toCompany === '小田急' ? 'bg-green-500' :
+                          transitDetails.toCompany === '京王' ? 'bg-purple-600' :
+                          'bg-gray-600'
+                        }`}>
+                          {transitDetails.toCompany} {transitDetails.toLine}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
